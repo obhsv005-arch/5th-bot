@@ -2,18 +2,40 @@ const express = require('express');
 const crypto = require('crypto');
 const https = require('https');
 const axios = require('axios');
+const fs = require('fs');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// ========== LOAD PROXIES FROM JSON ==========
+let proxyList = [];
+try {
+  const raw = fs.readFileSync('./proxies.json', 'utf8');
+  const data = JSON.parse(raw);
+  // Convert each "ip:port:user:pass" to "http://user:pass@ip:port"
+  proxyList = data.map(entry => {
+    const [ip, port, user, pass] = entry.split(':');
+    return `http://${user}:${pass}@${ip}:${port}`;
+  });
+  console.log(`✅ Loaded ${proxyList.length} proxies from proxies.json`);
+} catch (err) {
+  console.error('❌ Failed to load proxies.json:', err.message);
+  process.exit(1);
+}
+
+function getRandomProxyAgent() {
+  const proxyUrl = proxyList[Math.floor(Math.random() * proxyList.length)];
+  return new HttpsProxyAgent(proxyUrl);
+}
 
 // ========== TIKTOK VIEW FETCHER (with cache bypass) ==========
 const tiktokCache = new Map();          // video_id -> { data, timestamp }
 const lastRequestTime = new Map();      // video_id -> timestamp
 const CACHE_DURATION = 100 * 1000;      // 100 seconds (in ms)
-const MIN_REQUEST_INTERVAL = 1 * 1000;  // 3 seconds between requests to same video
+const MIN_REQUEST_INTERVAL = 1 * 1000;  // 1 second between requests to same video
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -88,7 +110,8 @@ async function getTikTokStats(videoId, ignoreCache = false) {
   try {
     const response = await axios.get(url, {
       headers: { 'User-Agent': getRandomUserAgent() },
-      timeout: 15000
+      timeout: 15000,
+      httpsAgent: getRandomProxyAgent()   // <-- proxy added here
     });
     const html = response.data;
 
@@ -238,7 +261,7 @@ app.post('/stop', (req, res) => {
 });
 
 // ========== REQUEST GENERATION ==========
-const agent = new https.Agent({ keepAlive: true });
+// (global keep-alive agent removed – now we use per-request proxy agent)
 
 function generateUltraDevice() {
   const device_id = Array.from({ length: 19 }, () => Math.floor(Math.random() * 10)).join('');
@@ -280,7 +303,7 @@ function sendUltraRequest(aweme_id) {
         'content-length': Buffer.byteLength(payload)
       },
       timeout: 3000,
-      agent
+      agent: getRandomProxyAgent()   // <-- proxy used for each request
     };
 
     const req = https.request(options, (res) => {
