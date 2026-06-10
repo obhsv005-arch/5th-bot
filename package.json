@@ -13,7 +13,8 @@
     "bot",
     "express",
     "views",
-    "automation"
+    "automation",
+    "https-proxy-agent"
   ],
   "author": "Rahmttollah",
   "license": "ISC",
